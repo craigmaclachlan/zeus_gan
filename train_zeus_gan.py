@@ -1,34 +1,32 @@
 #!/usr/bin/env python
+from __future__ import print_function
+
 import os
 import re
 import time
 import tensorflow as tf
 #import tf.layers
 import numpy as np
-from glob import glob
-import datetime
+import glob
+#import datetime
 import random
 from PIL import Image
 import matplotlib.pyplot as plt
 import argparse
 
-TRAIN_DATADIR = "training_imgs"
-INPUT_DATA_DIR = "./training_imgs/aahead/" # Path to the folder with input images. For more info check simspons_dataset.txt
-OUTPUT_DIR = './checkpoint/'
-IMAGE_DIR = './images'
+
 IMAGE_SIZE = 128
 NOISE_SIZE = 100
-LR_D = 0.00001
-LR_G = 0.0001
+LR_D = 0.00004
+LR_G = 0.0003
 BATCH_SIZE = 20
 MINI_BATCH = 10
-EPOCH = 0
 EPOCHS = 5000
 BETA1 = 0.5
 WEIGHT_INIT_STDDEV = 0.02
 EPSILON = 0.00005
 SAMPLES_TO_SHOW = 5
-TEST_DATA = np.random.uniform(-1, 1, size=[SAMPLES_TO_SHOW, NOISE_SIZE])
+
 
 def generator(z, output_channel_dim, training):
     with tf.variable_scope("generator", reuse=not training):
@@ -259,15 +257,13 @@ def model_inputs(real_dim, z_dim):
     return inputs_real, inputs_z, learning_rate_G, learning_rate_D
 
 
-def show_samples(sample_images, name, epoch):
+def show_samples(sample_images, output_path, epoch):
     figure, axes = plt.subplots(1, len(sample_images), figsize=(12, 3))
     for index, axis in enumerate(axes):
         axis.axis('off')
         image_array = sample_images[index]
         axis.imshow(image_array)
-    #    image = Image.fromarray(image_array)
-    #    image.save(name+"_"+str(epoch)+"_"+str(index)+".png")
-    img_path = os.path.join(IMAGE_DIR,
+    img_path = os.path.join(output_path,
                             'image_at_epoch_{:06d}.png'.format(epoch))
     plt.savefig(img_path, bbox_inches='tight', pad_inches=0)
     #plt.show()
@@ -278,7 +274,7 @@ def test(sess, input_z, out_channel_dim, epoch):
     example_z = TEST_DATA
     samples = sess.run(generator(input_z, out_channel_dim, False), feed_dict={input_z: example_z})
     sample_images = [((sample + 1.0) * 127.5).astype(np.uint8) for sample in samples]
-    show_samples(sample_images, OUTPUT_DIR + "samples", epoch)
+    show_samples(sample_images, GEN_IMG_DIR, epoch)
 
 
 def summarize_epoch(epoch, duration, sess, d_losses, g_losses, input_z, data_shape, saver):
@@ -292,11 +288,12 @@ def summarize_epoch(epoch, duration, sess, d_losses, g_losses, input_z, data_sha
     plt.plot(g_losses, label='Generator', alpha=0.6)
     plt.title("Losses")
     plt.legend()
-    loss_img = os.path.join(IMAGE_DIR, "losses.png")
+    loss_img = os.path.join(GEN_IMG_DIR, "losses.png")
     plt.savefig(loss_img)
-    #lt.show()
+    #plt.show()
     plt.close()
-    saver.save(sess, OUTPUT_DIR + "model_" + str(epoch) + ".ckpt")
+    checkpoint_path = os.path.join(CHKPT_DIR, "model_%05d.ckpt" % epoch)
+    saver.save(sess, checkpoint_path)
     test(sess, input_z, data_shape[3], epoch)
 
 
@@ -327,8 +324,12 @@ def train(batches_gen, data_shape, checkpoint_path):
         saver = tf.train.Saver()
         if checkpoint_path is not None:
             saver.restore(sess, checkpoint_path)
+            print("Checkpoint restored.")
             retxt = re.search("model_(\d+).ckpt", checkpoint_path)
             EPOCH = int(retxt.group(1))
+        else:
+            print("No previous checkpoint, starting fresh.")
+
         print("Starting at epoch: ", EPOCH)
         iteration = 0
         d_losses = []
@@ -355,11 +356,51 @@ def train(batches_gen, data_shape, checkpoint_path):
                             g_losses, input_z, data_shape, saver)
 
 
-
-
 if __name__ == '__main__':
 
+    parser = argparse.ArgumentParser(description='Train GAN to generate Zeuses')
+    parser.add_argument('training_images',
+                        help='Path to directory containing training images.'
+                             'Images need to be separated into sub-directories'
+                             'with the class name (even though these are ignored.')
+    parser.add_argument('output_root',
+                        help='Path to directory that will contain all the '
+                             'output: model checkpoints, test images, etc.')
 
+    args = parser.parse_args()
+
+    CHKPT_DIR = os.path.join(args.output_root, 'checkpoint')
+    GEN_IMG_DIR = os.path.join(args.output_root, 'images')
+    print('Looking for training images in: %s' % args.training_images)
+    print('Model output will be stored: %s' % args.output_root)
+    print('Model checkpoints will be stored: %s' % CHKPT_DIR)
+    print('Generated test images will be stored: %s' % GEN_IMG_DIR)
+
+    try:
+        os.makedirs(CHKPT_DIR)
+        os.makedirs(GEN_IMG_DIR)
+        print("Model directories created.")
+    except FileExistsError:
+        print("Model directories exist.")
+        pass
+
+    # Do the seeds for the test images exist already?
+    seed_file = os.path.join(CHKPT_DIR, 'test_seed.npy')
+    try:
+        TEST_DATA = np.load(seed_file)
+    except FileNotFoundError as exc:
+        print('Unable to load previous seeds for test images. Creating new ones.')
+        TEST_DATA = np.random.uniform(-1, 1, size=[SAMPLES_TO_SHOW, NOISE_SIZE])
+        np.save(seed_file, TEST_DATA)
+        print('Stored random seed in file.')
+
+
+    checkpoint_files = glob.glob(os.path.join(CHKPT_DIR, '*.index'))
+    try:
+        checkpoint_file = checkpoint_files[-1].replace('.index', '')
+    except IndexError as exc:
+        print('No pre-existing checkpoint file')
+        checkpoint_file = None
 
     image_gen_train = tf.keras.preprocessing.image.ImageDataGenerator(
         zoom_range=0.2,
@@ -370,14 +411,15 @@ if __name__ == '__main__':
         fill_mode='nearest',
         preprocessing_function=lambda x: x/127.5 - 1.0)
 
-
-    train_data_gen = image_gen_train.flow_from_directory(TRAIN_DATADIR,
-                                                   target_size=(IMAGE_SIZE,IMAGE_SIZE),
-                                                   batch_size=BATCH_SIZE,
-                                                   class_mode=None,
-                                                   shuffle=True)
+    train_data_gen = image_gen_train.flow_from_directory(
+        args.training_images,
+        target_size=(IMAGE_SIZE,IMAGE_SIZE),
+        batch_size=BATCH_SIZE,
+        class_mode=None,
+        shuffle=True
+    )
 
     with tf.Graph().as_default():
         train(train_data_gen,
               [BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, 3],
-              './checkpoint/model_1450.ckpt')
+              checkpoint_file)

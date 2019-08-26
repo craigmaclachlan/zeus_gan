@@ -11,6 +11,7 @@ setup(
     python_requires='>=3.7',
     install_requires=['tensorflow==2.0.0-beta1',
                       'matplotlib',
+                      'numpy',
                       'scipy',
                       'imageio'],
     )
