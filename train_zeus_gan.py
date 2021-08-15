@@ -1,364 +1,520 @@
-#!/usr/bin/env python
-from __future__ import print_function
+#!/usr/bin/env python3
 
+import numpy
 import os
-import re
+import sys
 import time
-import tensorflow as tf
-#import tf.layers
-import numpy as np
-import glob
-#import datetime
-import random
-from PIL import Image
-import matplotlib.pyplot as plt
 import argparse
+import glob
+
+import tensorflow as tf
+from tensorflow.keras import layers
+
+import matplotlib.pyplot as plt
+
+EPOCHS = 3000
+DIAG_UPDATES = 1
+MODEL_CHKPT = 1
+NOISE_DIM = 100
+BUFFER_SIZE = 60000
+BATCH_SIZE = 12
+NUM_EXAMPLES_TO_GENERATE = 5
+
+# LR_D = 0.00005
+# LR_G = 0.0005
+LR_D = 0.00002
+LR_G = 0.0005
 
 
-IMAGE_SIZE = 128
-NOISE_SIZE = 100
-LR_D = 0.00004
-LR_G = 0.0003
-BATCH_SIZE = 20
-MINI_BATCH = 10
-EPOCHS = 5000
 BETA1 = 0.5
-WEIGHT_INIT_STDDEV = 0.02
+#MINI_BATCH = 40
+RANDOM_SEED = 5
 EPSILON = 0.00005
-SAMPLES_TO_SHOW = 5
+WEIGHT_INIT_STDDEV = 0.02
+
+def make_generator_model_r128():
+    #initializer = tf.keras.initializers.TruncatedNormal
+    initializer = tf.keras.initializers.RandomNormal
+
+    model = tf.keras.Sequential()
+    model.add(layers.Dense(8 * 8 * 1024, use_bias=False, input_shape=(NOISE_DIM,)))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Reshape((8, 8, 1024)))
+
+    # 8x8x1024 -> 16x16x512
+    model.add(
+        layers.Conv2DTranspose(
+            512,
+            kernel_size=(4, 4),
+            strides=(2, 2),
+            padding='same',
+            kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                           seed=numpy.random.randint(99999)),
+            use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 16x16x512 -> 32x32x256
+    model.add(
+        layers.Conv2DTranspose(
+            256,
+            kernel_size=(4, 4),
+            strides=(2, 2),
+            padding='same',
+            kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                           seed=numpy.random.randint(99999)),
+            use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 32x32x256 -> 64x64x128
+    model.add(layers.Conv2DTranspose(
+        128,
+        kernel_size=(4, 4),
+        strides=(2, 2),
+        padding='same',
+        kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                           seed=numpy.random.randint(99999)),
+        use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 64x64x128 -> 128x128x64
+    model.add(layers.Conv2DTranspose(
+        64,
+        kernel_size=(4, 4),
+        strides=(2, 2),
+        padding='same',
+        kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                           seed=numpy.random.randint(99999)),
+        use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 128x128x64 -> 128x128x3
+    model.add(layers.Conv2DTranspose(
+        3,
+        kernel_size=(4, 4),
+        strides=(1, 1),
+        padding='same',
+        kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                       seed=numpy.random.randint(99999)),
+        use_bias=False,
+        activation='tanh')
+    )
+    print(model.output_shape)
+    assert model.output_shape == (None, 128, 128, 3)
+
+    return model
+
+def make_generator_model_r256():
+
+    #initializer = tf.keras.initializers.TruncatedNormal
+    initializer = tf.keras.initializers.RandomNormal
+
+    model = tf.keras.Sequential()
+    model.add(layers.Dense(8 * 8 * 1024, use_bias=False, input_shape=(NOISE_DIM,)))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Reshape((8, 8, 1024)))
+
+    # 8x8x1024 -> 16x16x512
+    model.add(
+        layers.Conv2DTranspose(
+            512,
+            kernel_size=(4, 4),
+            strides=(2, 2),
+            padding='same',
+            kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                           seed=numpy.random.randint(99999)),
+            use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 16x16x512 -> 32x32x256
+    model.add(
+        layers.Conv2DTranspose(
+            256,
+            kernel_size=(4, 4),
+            strides=(2, 2),
+            padding='same',
+            kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                           seed=numpy.random.randint(99999)),
+            use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 32x32x256 -> 64x64x128
+    model.add(layers.Conv2DTranspose(
+        128,
+        kernel_size=(4, 4),
+        strides=(2, 2),
+        padding='same',
+        kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                       seed=numpy.random.randint(99999)),
+        use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 64x64x128 -> 128x128x64
+    model.add(layers.Conv2DTranspose(
+        64,
+        kernel_size=(4, 4),
+        strides=(2, 2),
+        padding='same',
+        kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                       seed=numpy.random.randint(99999)),
+        use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 128x128x64 -> 256x256x32
+    model.add(layers.Conv2DTranspose(
+        32,
+        kernel_size=(4, 4),
+        strides=(2, 2),
+        padding='same',
+        kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                       seed=numpy.random.randint(99999)),
+        use_bias=False)
+    )
+    print(model.output_shape)
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+
+    # 256x256x32 -> 256x256x3
+    model.add(layers.Conv2DTranspose(
+        3,
+        kernel_size=(4, 4),
+        strides=(1, 1),
+        padding='same',
+        kernel_initializer=initializer(stddev=WEIGHT_INIT_STDDEV,
+                                       seed=numpy.random.randint(99999)),
+        use_bias=False,
+        activation='tanh')
+    )
+    print(model.output_shape)
+    assert model.output_shape == (None, 256, 256, 3)
+
+    return model
 
 
-def generator(z, output_channel_dim, training):
-    with tf.variable_scope("generator", reuse=not training):
-        # 32x32x256
-        fully_connected = tf.layers.dense(z, 8 * 8 * 1024)
-        fully_connected = tf.reshape(fully_connected, (-1, 8, 8, 1024))
-        fully_connected = tf.nn.leaky_relu(fully_connected)
+def make_discriminator_model_r128():
 
-        # 8x8x1024 -> 16x16x512
-        trans_conv1 = tf.layers.conv2d_transpose(inputs=fully_connected,
-                                                 filters=128,
-                                                 kernel_size=[5, 5],
-                                                 strides=[2, 2],
-                                                 padding="SAME",
-                                                 kernel_initializer=tf.truncated_normal_initializer(
-                                                     stddev=WEIGHT_INIT_STDDEV),
-                                                 name="trans_conv1")
-        batch_trans_conv1 = tf.layers.batch_normalization(inputs=trans_conv1,
-                                                          training=training,
-                                                          epsilon=EPSILON,
-                                                          name="batch_trans_conv1")
-        trans_conv1_out = tf.nn.leaky_relu(batch_trans_conv1,
-                                           name="trans_conv1_out")
+    #initializer = tf.keras.initializers.TruncatedNormal
+    initializer = tf.keras.initializers.RandomNormal
 
-        # 16x16x512 -> 32x32x256
-        trans_conv2 = tf.layers.conv2d_transpose(inputs=trans_conv1_out,
-                                                 filters=256,
-                                                 kernel_size=[5, 5],
-                                                 strides=[2, 2],
-                                                 padding="SAME",
-                                                 kernel_initializer=tf.truncated_normal_initializer(
-                                                     stddev=WEIGHT_INIT_STDDEV),
-                                                 name="trans_conv2")
-        batch_trans_conv2 = tf.layers.batch_normalization(inputs=trans_conv2,
-                                                          training=training,
-                                                          epsilon=EPSILON,
-                                                          name="batch_trans_conv2")
-        trans_conv2_out = tf.nn.leaky_relu(batch_trans_conv2,
-                                           name="trans_conv2_out")
+    model = tf.keras.Sequential()
 
-        # 32x32x256 -> 64x64x128
-        trans_conv3 = tf.layers.conv2d_transpose(inputs=trans_conv2_out,
-                                                 filters=128,
-                                                 kernel_size=[5, 5],
-                                                 strides=[2, 2],
-                                                 padding="SAME",
-                                                 kernel_initializer=tf.truncated_normal_initializer(
-                                                     stddev=WEIGHT_INIT_STDDEV),
-                                                 name="trans_conv3")
-        batch_trans_conv3 = tf.layers.batch_normalization(inputs=trans_conv3,
-                                                          training=training,
-                                                          epsilon=EPSILON,
-                                                          name="batch_trans_conv3")
-        trans_conv3_out = tf.nn.leaky_relu(batch_trans_conv3,
-                                           name="trans_conv3_out")
+    # 128*128*3 -> 128x128x64
+    model.add(layers.Conv2D(64, (4, 4),
+                            strides=(2, 2),
+                            padding='same',
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            input_shape=[128, 128, 3])
+              )
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
 
-        # 64x64x128 -> 128x128x64
-        trans_conv4 = tf.layers.conv2d_transpose(inputs=trans_conv3_out,
-                                                 filters=64,
-                                                 kernel_size=[5, 5],
-                                                 strides=[2, 2],
-                                                 padding="SAME",
-                                                 kernel_initializer=tf.truncated_normal_initializer(
-                                                     stddev=WEIGHT_INIT_STDDEV),
-                                                 name="trans_conv4")
-        batch_trans_conv4 = tf.layers.batch_normalization(inputs=trans_conv4,
-                                                          training=training,
-                                                          epsilon=EPSILON,
-                                                          name="batch_trans_conv4")
-        trans_conv4_out = tf.nn.leaky_relu(batch_trans_conv4,
-                                           name="trans_conv4_out")
+    # 128*128*64 -> 64x64x128
+    model.add(layers.Conv2D(128, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same')
+              )
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
 
-        # 128x128x64 -> 128x128x3
-        logits = tf.layers.conv2d_transpose(inputs=trans_conv4_out,
-                                            filters=3,
-                                            kernel_size=[5, 5],
-                                            strides=[1, 1],
-                                            padding="SAME",
-                                            kernel_initializer=tf.truncated_normal_initializer(
-                                                stddev=WEIGHT_INIT_STDDEV),
-                                            name="logits")
-        out = tf.tanh(logits, name="out")
-        return out
+    # 64x64x128-> 32x32x256
+    model.add(layers.Conv2D(256, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same'))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
+
+    # 32x32x256 -> 16x16x512
+    model.add(layers.Conv2D(512, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same'))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
+
+    # 16x16x512 -> 8x8x1024
+    model.add(layers.Conv2D(1024, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same'))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
+
+    model.add(layers.Flatten())
+    #model.add(layers.Dense(1, activation='sigmoid'))
+    model.add(layers.Dense(1))
+
+    return model
 
 
-def discriminator(x, reuse):
-    with tf.variable_scope("discriminator", reuse=reuse):
-        # 128*128*3 -> 64x64x64
-        conv1 = tf.layers.conv2d(inputs=x,
-                                 filters=64,
-                                 kernel_size=[5, 5],
-                                 strides=[2, 2],
-                                 padding="SAME",
-                                 kernel_initializer=tf.truncated_normal_initializer(
-                                     stddev=WEIGHT_INIT_STDDEV),
-                                 name='conv1')
-        batch_norm1 = tf.layers.batch_normalization(conv1,
-                                                    training=True,
-                                                    epsilon=EPSILON,
-                                                    name='batch_norm1')
-        conv1_out = tf.nn.leaky_relu(batch_norm1,
-                                     name="conv1_out")
+def make_discriminator_model_r256():
 
-        # 64x64x64-> 32x32x128
-        conv2 = tf.layers.conv2d(inputs=conv1_out,
-                                 filters=128,
-                                 kernel_size=[5, 5],
-                                 strides=[2, 2],
-                                 padding="SAME",
-                                 kernel_initializer=tf.truncated_normal_initializer(
-                                     stddev=WEIGHT_INIT_STDDEV),
-                                 name='conv2')
-        batch_norm2 = tf.layers.batch_normalization(conv2,
-                                                    training=True,
-                                                    epsilon=EPSILON,
-                                                    name='batch_norm2')
-        conv2_out = tf.nn.leaky_relu(batch_norm2,
-                                     name="conv2_out")
+    #initializer = tf.keras.initializers.TruncatedNormal
+    initializer = tf.keras.initializers.RandomNormal
 
-        # 32x32x128 -> 16x16x256
-        conv3 = tf.layers.conv2d(inputs=conv2_out,
-                                 filters=256,
-                                 kernel_size=[5, 5],
-                                 strides=[2, 2],
-                                 padding="SAME",
-                                 kernel_initializer=tf.truncated_normal_initializer(
-                                     stddev=WEIGHT_INIT_STDDEV),
-                                 name='conv3')
-        batch_norm3 = tf.layers.batch_normalization(conv3,
-                                                    training=True,
-                                                    epsilon=EPSILON,
-                                                    name='batch_norm3')
-        conv3_out = tf.nn.leaky_relu(batch_norm3,
-                                     name="conv3_out")
+    model = tf.keras.Sequential()
 
-        # 16x16x256 -> 16x16x512
-        conv4 = tf.layers.conv2d(inputs=conv3_out,
-                                 filters=512,
-                                 kernel_size=[5, 5],
-                                 strides=[1, 1],
-                                 padding="SAME",
-                                 kernel_initializer=tf.truncated_normal_initializer(
-                                     stddev=WEIGHT_INIT_STDDEV),
-                                 name='conv4')
-        batch_norm4 = tf.layers.batch_normalization(conv4,
-                                                    training=True,
-                                                    epsilon=EPSILON,
-                                                    name='batch_norm4')
-        conv4_out = tf.nn.leaky_relu(batch_norm4,
-                                     name="conv4_out")
+    # 256*256*3 -> 256x256x32
+    model.add(layers.Conv2D(32, (4, 4),
+                            strides=(2, 2),
+                            padding='same',
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            input_shape=[256, 256, 3])
+              )
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
 
-        # 16x16x512 -> 8x8x1024
-        conv5 = tf.layers.conv2d(inputs=conv4_out,
-                                 filters=1024,
-                                 kernel_size=[5, 5],
-                                 strides=[2, 2],
-                                 padding="SAME",
-                                 kernel_initializer=tf.truncated_normal_initializer(
-                                     stddev=WEIGHT_INIT_STDDEV),
-                                 name='conv5')
-        batch_norm5 = tf.layers.batch_normalization(conv5,
-                                                    training=True,
-                                                    epsilon=EPSILON,
-                                                    name='batch_norm5')
-        conv5_out = tf.nn.leaky_relu(batch_norm5,
-                                     name="conv5_out")
+    # 256*256*32 -> 128x128x64
+    model.add(layers.Conv2D(64, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same')
+              )
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
 
-        flatten = tf.reshape(conv5_out, (-1, 8 * 8 * 1024))
-        logits = tf.layers.dense(inputs=flatten,
-                                 units=1,
-                                 activation=None)
-        out = tf.sigmoid(logits)
-        return out, logits
+    # 128x128x64 -> 64x64x128
+    model.add(layers.Conv2D(128, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same')
+              )
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
+
+    # 64x64x128-> 32x32x256
+    model.add(layers.Conv2D(256, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same'))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
+
+    # 32x32x256 -> 16x16x512
+    model.add(layers.Conv2D(512, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same'))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
+
+    # 16x16x512 -> 8x8x1024
+    model.add(layers.Conv2D(1024, (4, 4),
+                            strides=(2, 2),
+                            kernel_initializer=initializer(
+                                stddev=WEIGHT_INIT_STDDEV,
+                                seed=numpy.random.randint(99999)),
+                            padding='same'))
+    model.add(layers.BatchNormalization(epsilon=EPSILON))
+    model.add(layers.LeakyReLU())
+    #model.add(layers.Dropout(0.3))
+
+    model.add(layers.Flatten())
+    #model.add(layers.Dense(1, activation='sigmoid'))
+    model.add(layers.Dense(1))
+
+    return model
 
 
-def model_loss(input_real, input_z, output_channel_dim):
-    g_model = generator(input_z, output_channel_dim, True)
-
-    noisy_input_real = input_real + tf.random_normal(shape=tf.shape(input_real),
-                                                     mean=0.0,
-                                                     stddev=random.uniform(0.0,
-                                                                           0.1),
-                                                     dtype=tf.float32)
-
-    d_model_real, d_logits_real = discriminator(noisy_input_real, reuse=False)
-    d_model_fake, d_logits_fake = discriminator(g_model, reuse=True)
-
-    d_loss_real = tf.reduce_mean(
-        tf.nn.sigmoid_cross_entropy_with_logits(logits=d_logits_real,
-                                                labels=tf.ones_like(
-                                                    d_model_real) * random.uniform(
-                                                    0.9, 1.0)))
-    d_loss_fake = tf.reduce_mean(
-        tf.nn.sigmoid_cross_entropy_with_logits(logits=d_logits_fake,
-                                                labels=tf.zeros_like(
-                                                    d_model_fake)))
-    d_loss = tf.reduce_mean(0.5 * (d_loss_real + d_loss_fake))
-    g_loss = tf.reduce_mean(
-        tf.nn.sigmoid_cross_entropy_with_logits(logits=d_logits_fake,
-                                                labels=tf.ones_like(
-                                                    d_model_fake)))
-    return d_loss, g_loss
+def smooth_positive_labels(y):
+	return y - 0.2 + (numpy.random.random(y.shape) * 0.2)
 
 
-def model_optimizers(d_loss, g_loss):
-    t_vars = tf.trainable_variables()
-    g_vars = [var for var in t_vars if var.name.startswith("generator")]
-    d_vars = [var for var in t_vars if var.name.startswith("discriminator")]
-
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    gen_updates = [op for op in update_ops if op.name.startswith('generator')]
-
-    with tf.control_dependencies(gen_updates):
-        d_train_opt = tf.train.AdamOptimizer(learning_rate=LR_D,
-                                             beta1=BETA1).minimize(d_loss,
-                                                                   var_list=d_vars)
-        g_train_opt = tf.train.AdamOptimizer(learning_rate=LR_G,
-                                             beta1=BETA1).minimize(g_loss,
-                                                                   var_list=g_vars)
-    return d_train_opt, g_train_opt
+def discriminator_loss(real_output, fake_output):
+    real_loss = cross_entropy(
+        smooth_positive_labels(tf.ones_like(real_output)),
+        real_output
+    )
+    fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
+    total_loss = tf.math.reduce_mean(real_loss + fake_loss)
+    return total_loss
 
 
-def model_inputs(real_dim, z_dim):
-    inputs_real = tf.placeholder(tf.float32, (None, *real_dim), name='inputs_real')
-    inputs_z = tf.placeholder(tf.float32, (None, z_dim), name="input_z")
-    learning_rate_G = tf.placeholder(tf.float32, name="lr_g")
-    learning_rate_D = tf.placeholder(tf.float32, name="lr_d")
-    return inputs_real, inputs_z, learning_rate_G, learning_rate_D
+def generator_loss(fake_output):
+    return tf.math.reduce_mean(
+        cross_entropy(tf.ones_like(fake_output), fake_output)
+    )
 
 
-def show_samples(sample_images, output_path, epoch):
-    figure, axes = plt.subplots(1, len(sample_images), figsize=(12, 3))
-    for index, axis in enumerate(axes):
-        axis.axis('off')
-        image_array = sample_images[index]
-        axis.imshow(image_array)
-    img_path = os.path.join(output_path,
-                            'image_at_epoch_{:06d}.png'.format(epoch))
+# Notice the use of `tf.function`
+# This annotation causes the function to be "compiled".
+@tf.function
+def train_step(images):
+    noise = tf.random.normal([BATCH_SIZE, NOISE_DIM])
+
+    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
+        generated_images = generator(noise, training=True)
+
+        # TODO: consider adding noise to the true images?
+        real_output = discriminator(images, training=True)
+        fake_output = discriminator(generated_images, training=True)
+
+        gen_loss = generator_loss(fake_output)
+        disc_loss = discriminator_loss(real_output, fake_output)
+
+    gradients_of_generator = gen_tape.gradient(gen_loss,
+                                               generator.trainable_variables)
+    gradients_of_discriminator = disc_tape.gradient(
+        disc_loss,
+        discriminator.trainable_variables
+    )
+
+    generator_optimizer.apply_gradients(
+        zip(gradients_of_generator, generator.trainable_variables))
+    discriminator_optimizer.apply_gradients(
+            zip(gradients_of_discriminator, discriminator.trainable_variables))
+
+    return gen_loss, disc_loss
+
+
+def generate_and_save_images(model, epoch, test_input, img_dir):
+    # Notice `training` is set to False.
+    # This is so all layers run in inference mode (batchnorm).
+    predictions = model(test_input, training=False)
+
+    fig = plt.figure(figsize=(12, 3))
+    for i in range(NUM_EXAMPLES_TO_GENERATE):
+        plt.subplot(1, NUM_EXAMPLES_TO_GENERATE, i+1)
+        img = numpy.clip((predictions[i, :, :, :].numpy()+1.0)/2.0, 0.0, 1.0)
+        plt.imshow(img)
+        plt.axis('off')
+
+    img_path = os.path.join(img_dir, 'image_at_epoch_{:06d}.png'.format(epoch))
     plt.savefig(img_path, bbox_inches='tight', pad_inches=0)
-    #plt.show()
-    plt.close()
+    plt.close(fig)
 
 
-def test(sess, input_z, out_channel_dim, epoch):
-    example_z = TEST_DATA
-    samples = sess.run(generator(input_z, out_channel_dim, False), feed_dict={input_z: example_z})
-    sample_images = [((sample + 1.0) * 127.5).astype(np.uint8) for sample in samples]
-    show_samples(sample_images, GEN_IMG_DIR, epoch)
+def plot_losses(epoch, d_losses, g_losses, plot_dir):
+    """Plot the loss values from the generator and discriminator."""
 
+    ep_range = range(1, epoch+1)[-len(d_losses):]
+    fig = plt.figure()
+    if len(d_losses) < 200:
+        plt.plot(ep_range, d_losses, label='Discriminator', alpha=0.6)
+        plt.plot(ep_range, g_losses, label='Generator', alpha=0.6)
+    else:
+        plt.plot(ep_range[-200:], d_losses[-200:], label='Discriminator', alpha=0.6)
+        plt.plot(ep_range[-200:], g_losses[-200:], label='Generator', alpha=0.6)
 
-def summarize_epoch(epoch, duration, sess, d_losses, g_losses, input_z, data_shape, saver):
-    minibatch_size = int(data_shape[0]//BATCH_SIZE)
-    print("Epoch {}/{}".format(epoch, EPOCHS),
-          "\nDuration: {:.5f}".format(duration),
-          "\nD Loss: {:.5f}".format(np.mean(d_losses[-minibatch_size:])),
-          "\nG Loss: {:.5f}".format(np.mean(g_losses[-minibatch_size:])))
-    fig, ax = plt.subplots()
-    plt.plot(d_losses, label='Discriminator', alpha=0.6)
-    plt.plot(g_losses, label='Generator', alpha=0.6)
+    plt.xlabel("Epoch")
     plt.title("Losses")
     plt.legend()
-    loss_img = os.path.join(GEN_IMG_DIR, "losses.png")
+    loss_img = os.path.join(plot_dir, "losses.png")
     plt.savefig(loss_img)
-    #plt.show()
-    plt.close()
-    checkpoint_path = os.path.join(CHKPT_DIR, "model_%05d.ckpt" % epoch)
-    saver.save(sess, checkpoint_path)
-    test(sess, input_z, data_shape[3], epoch)
+    plt.close(fig)
 
 
-def get_batches(data):
-    batches = []
-    for i in range(int(data.shape[0]//BATCH_SIZE)):
-        batch = data[i * BATCH_SIZE:(i + 1) * BATCH_SIZE]
-        augmented_images = []
-        for img in batch:
-            image = Image.fromarray(img)
-            if random.choice([True, False]):
-                image = image.transpose(Image.FLIP_LEFT_RIGHT)
-            augmented_images.append(np.asarray(image))
-        batch = np.asarray(augmented_images)
-        normalized_batch = (batch / 127.5) - 1.0
-        batches.append(normalized_batch)
-    return batches
+def train(dataset, epochs, test_img_seeds, checkpoint, cpoint_manager, img_dir,
+          n_mini_batch):
+    print("Starting to train.")
+    d_losses = []
+    g_losses = []
+
+    for epoch in range(int(checkpoint.step), epochs):
+        start = time.time()
+        gen_loss_avg = tf.keras.metrics.Mean()
+        dis_loss_avg = tf.keras.metrics.Mean()
+
+        for ii in range(n_mini_batch):
+            image_batch = next(dataset)
+            gloss, dloss = train_step(image_batch)
+            dis_loss_avg(dloss)
+            gen_loss_avg(gloss)
+            #d_losses.append(dloss)
+            #g_losses.append(gloss)
+
+        d_losses.append(dis_loss_avg.result())
+        g_losses.append(gen_loss_avg.result())
+
+        print("Epoch {}/{}".format(epoch, epochs),
+              "\nD Loss: {:.5f}".format(d_losses[-1]),
+              "\nG Loss: {:.5f}".format(g_losses[-1]))
+
+        # Produce images for the GIF as we go
+        if epoch % DIAG_UPDATES == 0:
+            generate_and_save_images(generator, epoch, test_img_seeds,
+                                     img_dir)
+            plot_losses(epoch, d_losses, g_losses, img_dir)
+
+        # Save the model every epoch
+        if int(checkpoint.step) % MODEL_CHKPT == 0:
+            save_path = cpoint_manager.save()
+            print(
+                "Saved checkpoint for step {}: {}".format(int(checkpoint.step),
+                                                          save_path)
+            )
+        checkpoint.step.assign_add(1)
+
+        print('Time for epoch {} is {} sec'.format(epoch,
+                                                   time.time()-start))
+
+    # Generate after the final epoch
+    generate_and_save_images(generator, epochs, test_img_seeds, img_dir)
 
 
-def train(batches_gen, data_shape, checkpoint_path):
-    input_images, input_z, lr_G, lr_D = model_inputs(data_shape[1:], NOISE_SIZE)
-    d_loss, g_loss = model_loss(input_images, input_z, data_shape[3])
-    d_opt, g_opt = model_optimizers(d_loss, g_loss)
-
-    EPOCH = 0
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        saver = tf.train.Saver()
-        if checkpoint_path is not None:
-            saver.restore(sess, checkpoint_path)
-            print("Checkpoint restored.")
-            retxt = re.search("model_(\d+).ckpt", checkpoint_path)
-            EPOCH = int(retxt.group(1))
-        else:
-            print("No previous checkpoint, starting fresh.")
-
-        print("Starting at epoch: ", EPOCH)
-        iteration = 0
-        d_losses = []
-        g_losses = []
-
-        for epoch in range(EPOCH, EPOCHS):
-            epoch += 1
-            start_time = time.time()
-
-            for ii in range(MINI_BATCH):
-                iteration += 1
-                batch_images = next(batches_gen)
-                batch_z = np.random.uniform(-1, 1,
-                                            size=(BATCH_SIZE, NOISE_SIZE))
-                _ = sess.run(d_opt, feed_dict={input_images: batch_images,
-                                               input_z: batch_z, lr_D: LR_D})
-                _ = sess.run(g_opt, feed_dict={input_images: batch_images,
-                                               input_z: batch_z, lr_G: LR_G})
-                d_losses.append(
-                    d_loss.eval({input_z: batch_z, input_images: batch_images}))
-                g_losses.append(g_loss.eval({input_z: batch_z}))
-
-            summarize_epoch(epoch, time.time() - start_time, sess, d_losses,
-                            g_losses, input_z, data_shape, saver)
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Train GAN to generate Zeuses')
+    parser.add_argument('res', help='Resolution of images: 128 or 256.',
+                        type=int)
     parser.add_argument('training_images',
                         help='Path to directory containing training images.'
                              'Images need to be separated into sub-directories'
@@ -369,38 +525,25 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    CHKPT_DIR = os.path.join(args.output_root, 'checkpoint')
-    GEN_IMG_DIR = os.path.join(args.output_root, 'images')
+    n_images = len(glob.glob(args.training_images + '/*/*'))
+    n_mini_batch = n_images // BATCH_SIZE
+    n_mini_batch = n_mini_batch if n_mini_batch > 200 else 200
+    checkpoint_dir = os.path.join(args.output_root, 'checkpoint')
+    gen_img_dir = os.path.join(args.output_root, 'images')
     print('Looking for training images in: %s' % args.training_images)
+    print('Number of training images = %d' % n_images)
+    print('Number of mini batches = %d' % n_mini_batch)
     print('Model output will be stored: %s' % args.output_root)
-    print('Model checkpoints will be stored: %s' % CHKPT_DIR)
-    print('Generated test images will be stored: %s' % GEN_IMG_DIR)
+    print('Model checkpoints will be stored: %s' % checkpoint_dir)
+    print('Generated test images will be stored: %s' % gen_img_dir)
 
     try:
-        os.makedirs(CHKPT_DIR)
-        os.makedirs(GEN_IMG_DIR)
+        os.makedirs(checkpoint_dir)
+        os.makedirs(gen_img_dir)
         print("Model directories created.")
     except FileExistsError:
         print("Model directories exist.")
         pass
-
-    # Do the seeds for the test images exist already?
-    seed_file = os.path.join(CHKPT_DIR, 'test_seed.npy')
-    try:
-        TEST_DATA = np.load(seed_file)
-    except FileNotFoundError as exc:
-        print('Unable to load previous seeds for test images. Creating new ones.')
-        TEST_DATA = np.random.uniform(-1, 1, size=[SAMPLES_TO_SHOW, NOISE_SIZE])
-        np.save(seed_file, TEST_DATA)
-        print('Stored random seed in file.')
-
-
-    checkpoint_files = glob.glob(os.path.join(CHKPT_DIR, '*.index'))
-    try:
-        checkpoint_file = checkpoint_files[-1].replace('.index', '')
-    except IndexError as exc:
-        print('No pre-existing checkpoint file')
-        checkpoint_file = None
 
     image_gen_train = tf.keras.preprocessing.image.ImageDataGenerator(
         zoom_range=0.2,
@@ -413,13 +556,47 @@ if __name__ == '__main__':
 
     train_data_gen = image_gen_train.flow_from_directory(
         args.training_images,
-        target_size=(IMAGE_SIZE,IMAGE_SIZE),
+        target_size=(args.res, args.res),
         batch_size=BATCH_SIZE,
         class_mode=None,
-        shuffle=True
-    )
+        shuffle=True)
 
-    with tf.Graph().as_default():
-        train(train_data_gen,
-              [BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, 3],
-              checkpoint_file)
+    if args.res == 128:
+        generator = make_generator_model_r128()
+        discriminator = make_discriminator_model_r128()
+    elif args.res == 256:
+        generator = make_generator_model_r256()
+        discriminator = make_discriminator_model_r256()
+    else:
+        print("ERROR: Invalid resolution: %s" % args.res)
+        sys.exit()
+
+    cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+    generator_optimizer = tf.keras.optimizers.Adam(learning_rate=LR_G,
+                                                   beta_1=BETA1)
+    discriminator_optimizer = tf.keras.optimizers.Adam(learning_rate=LR_D,
+                                                       beta_1=BETA1)
+
+    # Set up the model checkpointing
+    checkpoint = tf.train.Checkpoint(
+        step=tf.Variable(1),
+        generator_optimizer=generator_optimizer,
+        discriminator_optimizer=discriminator_optimizer,
+        generator=generator,
+        discriminator=discriminator
+    )
+    manager = tf.train.CheckpointManager(checkpoint,
+                                         checkpoint_dir,
+                                         max_to_keep=3)
+
+    checkpoint.restore(manager.latest_checkpoint)
+    if manager.latest_checkpoint:
+        print("Restored from {}".format(manager.latest_checkpoint))
+    else:
+        print("Initializing from scratch.")
+
+    random_normal = tf.random_normal_initializer(seed=RANDOM_SEED, stddev=1.0)
+    test_seeds = random_normal([NUM_EXAMPLES_TO_GENERATE, NOISE_DIM])
+
+    train(train_data_gen, EPOCHS, test_seeds, checkpoint, manager, gen_img_dir,
+          n_mini_batch)

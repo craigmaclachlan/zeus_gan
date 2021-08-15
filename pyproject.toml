@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "zeus-gan"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+authors = ["Craig MacLachlan <cs.maclachlan@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "3.9.6"
+scipy = "^1.7.1"
+imageio = "^2.9.0"
+numpy = "^1.19.0, <1.20.0"
+tensorflow-macos = "^2.5.0"
+tensorflow-metal = "^0.1.2"
+matplotlib = "^3.4.3"
+
+[tool.poetry.dev-dependencies]
+flake8 = "^3.9.2"
+mypy = "^0.910"
+black = "^21.7b0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
