@@ -9,7 +9,7 @@ setup(
     author_email='cs.maclachlan@gmail.com',
     #packages=['articlass'],
     python_requires='>=3.7',
-    install_requires=['tensorflow==2.0.0-beta1',
+    install_requires=['tensorflow==2.4.2',
                       'matplotlib',
                       'numpy',
                       'scipy',
